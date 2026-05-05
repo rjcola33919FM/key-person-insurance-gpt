@@ -8,13 +8,110 @@ type FormState = "idle" | "submitting" | "success";
 
 const MAX_MESSAGE_LENGTH = 3000;
 
+// ── Reusable chat thread renderer ──────────────────────────────────────────
+function ChatThread({
+  messages,
+  loading,
+  error,
+  bottomRef,
+}: {
+  messages: ChatMessage[];
+  loading: boolean;
+  error: string;
+  bottomRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <>
+      {messages.map((msg, i) => (
+        <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+          {msg.role === "assistant" && (
+            <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-white text-xs font-bold mr-2 mt-0.5 flex-shrink-0">
+              KP
+            </div>
+          )}
+          <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+            msg.role === "user"
+              ? "bg-slate-800 text-white rounded-tr-sm"
+              : "bg-gray-50 border border-gray-200 text-gray-800 rounded-tl-sm"
+          }`}>
+            {msg.content}
+          </div>
+        </div>
+      ))}
+      {loading && (
+        <div className="flex justify-start">
+          <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-white text-xs font-bold mr-2 mt-0.5 flex-shrink-0">KP</div>
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3">
+            <div className="flex gap-1 items-center h-4">
+              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:0ms]" />
+              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:300ms]" />
+            </div>
+          </div>
+        </div>
+      )}
+      {error && <p className="text-red-500 text-xs text-center">{error}</p>}
+      <div ref={bottomRef} />
+    </>
+  );
+}
+
+// ── Reusable chat input ────────────────────────────────────────────────────
+function ChatInput({
+  value,
+  onChange,
+  onSend,
+  loading,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: (v: string) => void;
+  loading: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); onSend(value); }}
+      className="flex gap-2 items-end"
+    >
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(value); } }}
+        placeholder={placeholder ?? "Ask a question…"}
+        rows={1}
+        maxLength={MAX_MESSAGE_LENGTH}
+        disabled={loading}
+        className="flex-1 resize-none rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent disabled:opacity-50"
+        style={{ minHeight: 40, maxHeight: 110, overflowY: "auto" }}
+      />
+      <button
+        type="submit"
+        disabled={loading || !value.trim()}
+        className="flex-shrink-0 px-4 py-2.5 rounded-xl bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        Send
+      </button>
+    </form>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function Home() {
-  // ── Chat state ────────────────────────────────────────────────────────────
+  // ── Shared chat state (section + floating widget share same history) ───────
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [floatInput, setFloatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const sectionBottomRef = useRef<HTMLDivElement>(null);
+  const floatBottomRef = useRef<HTMLDivElement>(null);
+
+  // ── Floating widget state ─────────────────────────────────────────────────
+  const [floatOpen, setFloatOpen] = useState(false);
+  const [showNudge, setShowNudge] = useState(false);
 
   // ── Form state ────────────────────────────────────────────────────────────
   const [formState, setFormState] = useState<FormState>("idle");
@@ -37,11 +134,19 @@ export default function Home() {
     return () => document.removeEventListener("mouseleave", handler);
   }, []);
 
+  // Auto-scroll both threads
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    sectionBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    floatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, chatLoading]);
 
-  // ── Chat handlers ─────────────────────────────────────────────────────────
+  // Show schedule nudge after 2 assistant replies
+  useEffect(() => {
+    const assistantCount = messages.filter((m) => m.role === "assistant").length;
+    if (assistantCount >= 2) setShowNudge(true);
+  }, [messages]);
+
+  // ── Core send function ────────────────────────────────────────────────────
   async function sendMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed || chatLoading) return;
@@ -51,6 +156,7 @@ export default function Home() {
     const nextHistory = [...messages, userMsg];
     setMessages(nextHistory);
     setInput("");
+    setFloatInput("");
     setChatError("");
     setChatLoading(true);
 
@@ -70,13 +176,10 @@ export default function Home() {
     }
   }
 
-  function handleChatSubmit(e: FormEvent) { e.preventDefault(); sendMessage(input); }
-
   // ── Form handler ──────────────────────────────────────────────────────────
   function handleFormSubmit(e: FormEvent) {
     e.preventDefault();
     setFormState("submitting");
-    // Replace with actual CRM/calendar integration endpoint
     setTimeout(() => setFormState("success"), 1200);
   }
 
@@ -84,8 +187,9 @@ export default function Home() {
     document.getElementById("schedule")?.scrollIntoView({ behavior: "smooth" });
   }
 
-  function scrollToChat() {
+  function scrollToSection() {
     document.getElementById("advisor")?.scrollIntoView({ behavior: "smooth" });
+    setFloatOpen(false);
   }
 
   return (
@@ -98,12 +202,21 @@ export default function Home() {
             <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-white text-xs font-bold">KP</div>
             <span className="font-bold text-gray-900 text-sm">Key Person Advisor</span>
           </div>
-          <button
-            onClick={scrollToForm}
-            className="bg-slate-800 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-slate-700 transition-colors"
-          >
-            Schedule My Review
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setFloatOpen((o) => !o)}
+              className="hidden sm:flex items-center gap-2 border border-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded-lg hover:border-slate-400 transition-colors"
+            >
+              <span className="w-2 h-2 rounded-full bg-green-400" />
+              Ask the Advisor
+            </button>
+            <button
+              onClick={scrollToForm}
+              className="bg-slate-800 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-slate-700 transition-colors"
+            >
+              Schedule My Review
+            </button>
+          </div>
         </div>
       </header>
 
@@ -126,7 +239,7 @@ export default function Home() {
                 Schedule My Business Protection Review
               </button>
               <button
-                onClick={scrollToChat}
+                onClick={scrollToSection}
                 className="border border-slate-500 text-white font-semibold text-base px-8 py-4 rounded-xl hover:border-white transition-colors"
               >
                 Ask the Virtual Agent a Question
@@ -153,7 +266,6 @@ export default function Home() {
               <p className="text-sm text-gray-400 mt-3">Educational only. No pressure. No obligation.</p>
             </div>
 
-            {/* Chat widget */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               {/* Starter questions */}
               {messages.length === 0 && (
@@ -174,59 +286,37 @@ export default function Home() {
               )}
 
               {/* Thread */}
-              <div className="px-6 py-4 flex flex-col gap-4 max-h-96 overflow-y-auto">
-                {messages.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                    {msg.role === "assistant" && (
-                      <div className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center text-white text-xs font-bold mr-2 mt-0.5 flex-shrink-0">KP</div>
-                    )}
-                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
-                      msg.role === "user"
-                        ? "bg-slate-800 text-white rounded-tr-sm"
-                        : "bg-gray-50 border border-gray-200 text-gray-800 rounded-tl-sm"
-                    }`}>
-                      {msg.content}
-                    </div>
-                  </div>
-                ))}
-                {chatLoading && (
-                  <div className="flex justify-start">
-                    <div className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center text-white text-xs font-bold mr-2 mt-0.5 flex-shrink-0">KP</div>
-                    <div className="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3">
-                      <div className="flex gap-1 items-center h-4">
-                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:300ms]" />
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {chatError && <p className="text-red-500 text-sm text-center">{chatError}</p>}
-                <div ref={bottomRef} />
+              <div className="px-6 py-5 flex flex-col gap-4 max-h-96 overflow-y-auto">
+                <ChatThread
+                  messages={messages}
+                  loading={chatLoading}
+                  error={chatError}
+                  bottomRef={sectionBottomRef}
+                />
               </div>
+
+              {/* Schedule nudge (after 2 replies) */}
+              {showNudge && (
+                <div className="mx-6 mb-4 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-4">
+                  <p className="text-xs text-slate-600">Ready to review your actual coverage?</p>
+                  <button
+                    onClick={scrollToForm}
+                    className="flex-shrink-0 text-xs font-semibold bg-slate-800 text-white px-4 py-1.5 rounded-lg hover:bg-slate-700 transition-colors"
+                  >
+                    Schedule a Review →
+                  </button>
+                </div>
+              )}
 
               {/* Input */}
               <div className="px-6 py-4 border-t border-gray-100">
-                <form onSubmit={handleChatSubmit} className="flex gap-3 items-end">
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
-                    placeholder='"Do I have enough key person coverage for my business?"'
-                    rows={1}
-                    maxLength={MAX_MESSAGE_LENGTH}
-                    disabled={chatLoading}
-                    className="flex-1 resize-none rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent disabled:opacity-50"
-                    style={{ minHeight: 42, maxHeight: 120, overflowY: "auto" }}
-                  />
-                  <button
-                    type="submit"
-                    disabled={chatLoading || !input.trim()}
-                    className="flex-shrink-0 px-5 py-2.5 rounded-xl bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    Send
-                  </button>
-                </form>
+                <ChatInput
+                  value={input}
+                  onChange={setInput}
+                  onSend={sendMessage}
+                  loading={chatLoading}
+                  placeholder='"Do I have enough key person coverage for my business?"'
+                />
               </div>
             </div>
           </div>
@@ -264,8 +354,6 @@ export default function Home() {
         <section className="px-6 py-16 bg-gray-50 border-y border-gray-200">
           <div className="max-w-4xl mx-auto">
             <div className="grid md:grid-cols-2 gap-8">
-
-              {/* Single Owner */}
               <div className="bg-white rounded-2xl border border-gray-200 p-8">
                 <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold text-sm mb-5">01</div>
                 <h3 className="text-xl font-bold text-gray-900 mb-3">Single Owner</h3>
@@ -275,15 +363,11 @@ export default function Home() {
                 <p className="text-gray-600 text-sm leading-relaxed mb-6">
                   Your family may inherit the business, but they may not have the time, experience, or cash to operate it. Key person insurance can help provide funds to stabilize the business, protect employees, manage debt, and avoid a rushed sale.
                 </p>
-                <button
-                  onClick={scrollToForm}
-                  className="w-full bg-slate-800 text-white text-sm font-semibold py-3 rounded-xl hover:bg-slate-700 transition-colors"
-                >
+                <button onClick={scrollToForm} className="w-full bg-slate-800 text-white text-sm font-semibold py-3 rounded-xl hover:bg-slate-700 transition-colors">
                   Schedule a Review to Evaluate Your Coverage
                 </button>
               </div>
 
-              {/* Business Partners */}
               <div className="bg-white rounded-2xl border border-gray-200 p-8">
                 <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold text-sm mb-5">02</div>
                 <h3 className="text-xl font-bold text-gray-900 mb-3">Business Partners</h3>
@@ -294,20 +378,15 @@ export default function Home() {
                 <ul className="text-sm text-gray-600 space-y-1.5 mb-6">
                   {["Ownership disputes", "Debt strain", "Loss of control"].map((r) => (
                     <li key={r} className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" />
-                      {r}
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" />{r}
                     </li>
                   ))}
                 </ul>
                 <p className="text-gray-600 text-sm mb-6">Key person insurance can help create the liquidity needed to maintain control and treat the family fairly.</p>
-                <button
-                  onClick={scrollToForm}
-                  className="w-full bg-slate-800 text-white text-sm font-semibold py-3 rounded-xl hover:bg-slate-700 transition-colors"
-                >
+                <button onClick={scrollToForm} className="w-full bg-slate-800 text-white text-sm font-semibold py-3 rounded-xl hover:bg-slate-700 transition-colors">
                   Check If Your Buy-Sell Is Properly Funded
                 </button>
               </div>
-
             </div>
           </div>
         </section>
@@ -315,19 +394,11 @@ export default function Home() {
         {/* ── 5. SOLUTION ──────────────────────────────────────────────────── */}
         <section className="px-6 py-16 bg-white">
           <div className="max-w-3xl mx-auto">
-            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-3">
-              A Simple Concept. A Critical Financial Tool.
-            </h2>
+            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-3">A Simple Concept. A Critical Financial Tool.</h2>
             <p className="text-gray-600 text-base mb-6">Key person insurance provides liquidity when your business needs it most.</p>
             <p className="text-gray-700 mb-4">The business owns a policy on a key owner, partner, or employee. If that person passes away, the business receives funds that can help:</p>
             <ul className="space-y-3 mb-8">
-              {[
-                "Cover operating expenses",
-                "Pay down debt",
-                "Retain employees",
-                "Reassure customers and lenders",
-                "Fund ownership transitions",
-              ].map((item) => (
+              {["Cover operating expenses", "Pay down debt", "Retain employees", "Reassure customers and lenders", "Fund ownership transitions"].map((item) => (
                 <li key={item} className="flex items-center gap-3 text-gray-700">
                   <span className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 text-xs flex-shrink-0">✓</span>
                   {item}
@@ -344,12 +415,9 @@ export default function Home() {
         <section id="schedule" className="bg-slate-900 px-6 py-20">
           <div className="max-w-2xl mx-auto">
             <div className="text-center mb-10">
-              <h2 className="text-3xl font-bold text-white mb-3">
-                Start With Clarity — Not a Policy
-              </h2>
+              <h2 className="text-3xl font-bold text-white mb-3">Start With Clarity — Not a Policy</h2>
               <p className="text-slate-300 text-base leading-relaxed">
-                The first step is not buying insurance.<br />
-                The first step is understanding your risk.
+                The first step is not buying insurance.<br />The first step is understanding your risk.
               </p>
               <div className="flex justify-center gap-4 mt-5 flex-wrap">
                 <span className="text-xs text-slate-400 border border-slate-600 rounded-full px-4 py-1.5">Confidential</span>
@@ -367,72 +435,34 @@ export default function Home() {
             ) : (
               <form onSubmit={handleFormSubmit} className="bg-white rounded-2xl p-8 flex flex-col gap-5">
                 <h3 className="text-lg font-bold text-gray-900">Schedule My Business Protection Review</h3>
-
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Name</label>
-                    <input
-                      required
-                      value={form.name}
-                      onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      placeholder="Your name"
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    />
+                    <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Your name" className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Business Name</label>
-                    <input
-                      required
-                      value={form.business}
-                      onChange={(e) => setForm({ ...form, business: e.target.value })}
-                      placeholder="Your company"
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    />
+                    <input required value={form.business} onChange={(e) => setForm({ ...form, business: e.target.value })} placeholder="Your company" className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
                   </div>
                 </div>
-
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Email</label>
-                    <input
-                      required
-                      type="email"
-                      value={form.email}
-                      onChange={(e) => setForm({ ...form, email: e.target.value })}
-                      placeholder="you@company.com"
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    />
+                    <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@company.com" className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Phone</label>
-                    <input
-                      required
-                      type="tel"
-                      value={form.phone}
-                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                      placeholder="(555) 000-0000"
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    />
+                    <input required type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="(555) 000-0000" className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
                   </div>
                 </div>
-
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Number of Owners / Partners</label>
-                    <input
-                      value={form.owners}
-                      onChange={(e) => setForm({ ...form, owners: e.target.value })}
-                      placeholder="e.g. 2"
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    />
+                    <input value={form.owners} onChange={(e) => setForm({ ...form, owners: e.target.value })} placeholder="e.g. 2" className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400" />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Primary Concern</label>
-                    <select
-                      value={form.concern}
-                      onChange={(e) => setForm({ ...form, concern: e.target.value })}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    >
+                    <select value={form.concern} onChange={(e) => setForm({ ...form, concern: e.target.value })} className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-slate-400">
                       <option value="">Select one…</option>
                       <option value="single-owner">Single owner continuity</option>
                       <option value="partner-buysell">Partner buy-sell funding</option>
@@ -442,23 +472,13 @@ export default function Home() {
                     </select>
                   </div>
                 </div>
-
-                {/* Calendar embed placeholder */}
                 <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-5 text-center text-sm text-gray-400">
                   Calendar scheduling embed — connect Calendly or HubSpot Meetings here
                 </div>
-
-                <button
-                  type="submit"
-                  disabled={formState === "submitting"}
-                  className="w-full bg-slate-800 text-white font-bold text-base py-4 rounded-xl hover:bg-slate-700 disabled:opacity-50 transition-colors"
-                >
-                  {formState === "submitting" ? "Submitting..." : "Schedule My Business Protection Review →"}
+                <button type="submit" disabled={formState === "submitting"} className="w-full bg-slate-800 text-white font-bold text-base py-4 rounded-xl hover:bg-slate-700 disabled:opacity-50 transition-colors">
+                  {formState === "submitting" ? "Submitting…" : "Schedule My Business Protection Review →"}
                 </button>
-
-                <p className="text-xs text-gray-400 text-center">
-                  A focused review to identify gaps in coverage, buy-sell funding, and business continuity planning.
-                </p>
+                <p className="text-xs text-gray-400 text-center">A focused review to identify gaps in coverage, buy-sell funding, and business continuity planning.</p>
               </form>
             )}
           </div>
@@ -472,36 +492,115 @@ export default function Home() {
             </p>
           </div>
         </footer>
+      </div>
 
+      {/* ── Floating Chat Widget ──────────────────────────────────────────── */}
+      <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-3">
+
+        {/* Expanded panel */}
+        {floatOpen && (
+          <div className="w-80 sm:w-96 bg-white rounded-2xl border border-gray-200 shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: 520 }}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-800 text-white">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">KP</div>
+                <div>
+                  <p className="text-sm font-semibold leading-tight">Key Person Advisor</p>
+                  <p className="text-xs text-slate-300 leading-tight flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-400" />Online
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setFloatOpen(false)} className="text-slate-300 hover:text-white text-lg leading-none">×</button>
+            </div>
+
+            {/* Thread */}
+            <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 bg-white">
+              {messages.length === 0 ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Common questions</p>
+                  {STARTER_QUESTIONS.slice(0, 4).map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => sendMessage(q)}
+                      className="text-left px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 text-xs hover:bg-slate-50 hover:border-slate-300 transition-colors"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <ChatThread
+                  messages={messages}
+                  loading={chatLoading}
+                  error={chatError}
+                  bottomRef={floatBottomRef}
+                />
+              )}
+            </div>
+
+            {/* Schedule nudge */}
+            {showNudge && (
+              <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-600">Ready to review your actual coverage?</p>
+                <button
+                  onClick={() => { setFloatOpen(false); scrollToForm(); }}
+                  className="flex-shrink-0 text-xs font-semibold bg-slate-800 text-white px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors"
+                >
+                  Schedule →
+                </button>
+              </div>
+            )}
+
+            {/* Input */}
+            <div className="px-4 py-3 border-t border-gray-100">
+              <ChatInput
+                value={floatInput}
+                onChange={setFloatInput}
+                onSend={sendMessage}
+                loading={chatLoading}
+                placeholder="Ask a key person insurance question…"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Bubble button */}
+        <button
+          onClick={() => setFloatOpen((o) => !o)}
+          className="w-14 h-14 rounded-full bg-slate-800 text-white shadow-xl hover:bg-slate-700 transition-colors flex items-center justify-center relative"
+          aria-label="Open Key Person Advisor"
+        >
+          {floatOpen ? (
+            <span className="text-xl">×</span>
+          ) : (
+            <span className="text-lg font-bold">KP</span>
+          )}
+          {!floatOpen && messages.length === 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-green-400 border-2 border-white" />
+          )}
+          {!floatOpen && messages.length > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 border-2 border-white text-white text-xs flex items-center justify-center font-bold">
+              {messages.filter((m) => m.role === "assistant").length}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* ── Exit Intent Modal ─────────────────────────────────────────────── */}
       {showExit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
           <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
-            <h3 className="text-xl font-bold text-gray-900 mb-2">
-              Before you leave — want to check if your coverage is outdated?
-            </h3>
-            <p className="text-gray-600 text-sm mb-6">
-              Most key person policies are never reviewed after they&apos;re issued. A quick check takes less than 10 minutes.
-            </p>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Before you leave — want to check if your coverage is outdated?</h3>
+            <p className="text-gray-600 text-sm mb-6">Most key person policies are never reviewed after they&apos;re issued. A quick check takes less than 10 minutes.</p>
             <div className="flex flex-col gap-3">
-              <button
-                onClick={() => { setShowExit(false); scrollToForm(); }}
-                className="w-full bg-slate-800 text-white font-semibold py-3 rounded-xl hover:bg-slate-700 transition-colors text-sm"
-              >
+              <button onClick={() => { setShowExit(false); scrollToForm(); }} className="w-full bg-slate-800 text-white font-semibold py-3 rounded-xl hover:bg-slate-700 transition-colors text-sm">
                 Schedule My Free Review
               </button>
-              <button
-                onClick={() => { setShowExit(false); scrollToChat(); }}
-                className="w-full border border-gray-300 text-gray-700 font-semibold py-3 rounded-xl hover:bg-gray-50 transition-colors text-sm"
-              >
+              <button onClick={() => { setShowExit(false); setFloatOpen(true); }} className="w-full border border-gray-300 text-gray-700 font-semibold py-3 rounded-xl hover:bg-gray-50 transition-colors text-sm">
                 Ask the Virtual Agent First
               </button>
-              <button
-                onClick={() => setShowExit(false)}
-                className="text-gray-400 text-xs hover:text-gray-600 text-center"
-              >
+              <button onClick={() => setShowExit(false)} className="text-gray-400 text-xs hover:text-gray-600 text-center">
                 No thanks, I&apos;ll skip the review
               </button>
             </div>
