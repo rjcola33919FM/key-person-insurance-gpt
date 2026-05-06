@@ -308,15 +308,15 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Input */}
+              {/* Schedule CTA */}
               <div className="px-6 py-4 border-t border-gray-100">
-                <ChatInput
-                  value={input}
-                  onChange={setInput}
-                  onSend={sendMessage}
-                  loading={chatLoading}
-                  placeholder='"Do I have enough key person coverage for my business?"'
-                />
+                <button
+                  onClick={scrollToForm}
+                  className="w-full bg-slate-800 text-white font-semibold text-sm py-3.5 rounded-xl hover:bg-slate-700 transition-colors"
+                >
+                  Schedule My Business Protection Review →
+                </button>
+                <p className="text-xs text-gray-400 text-center mt-2">Confidential · No obligation · Takes less than 10 minutes</p>
               </div>
             </div>
           </div>
